@@ -1,286 +1,217 @@
 import figlet from "figlet";
-import chalk from "chalk";
+import pc from "picocolors";
 import { execa } from "execa";
 import ora from "ora";
 import path from "node:path";
-import fs from "fs-extra";
-import {
-	mongodbTemplate,
-	exampleModelTemplate,
-	exampleApiTemplate,
-	examplePageTemplate,
-	envTemplate,
-	packageJsonTemplate,
-	TEMPLATES,
-} from "./templates";
+import { mkdir, rm } from "node:fs/promises";
 import type { ProjectOptions, ProjectResult } from "../types";
 import prompts from "prompts";
 
-export const DEFAULT_REPO = "stevedylandev/bhvr";
+// --- Display Functions ---
 
 export function displayBanner() {
-	try {
-		const text = figlet.textSync("comet", {
-			font: "Big",
-			horizontalLayout: "default",
-			verticalLayout: "default",
-			width: 80,
-			whitespaceBreak: true,
-		});
-
-		console.log("\n");
-		console.log(chalk.yellowBright(text));
-	} catch (error) {
-		console.log("\n");
-		console.log(chalk.yellowBright("COMET"));
-		console.log(chalk.yellow("=========="));
-	}
-
-	console.log(`\n${chalk.cyan("🦫 Lets build 🦫")}\n`);
-	console.log(`${chalk.blue("https://github.com/stevedylandev/bhvr")}\n`);
+  try {
+    const text = figlet.textSync("comet", { font: "Rowan Cap" });
+    console.log("\n" + pc.yellowBright(text));
+  } catch (error) {
+    console.log(
+      "\n" + pc.yellowBright("comet") + "\n" + pc.yellow("==========="),
+    );
+  }
 }
 
-async function setupNextJsProject(projectPath: string, templateChoice: string): Promise<void> {
-	const spinner = ora("Setting up Next.js project...").start();
-
-	try {
-		// Create necessary directories
-		await fs.ensureDir(path.join(projectPath, "src", "app"));
-		await fs.ensureDir(path.join(projectPath, "src", "lib"));
-		await fs.ensureDir(path.join(projectPath, "src", "models"));
-		await fs.ensureDir(path.join(projectPath, "src", "app", "api"));
-		await fs.ensureDir(path.join(projectPath, "src", "app", "api", "examples"));
-
-		// Write package.json
-		await fs.writeJson(path.join(projectPath, "package.json"), JSON.parse(packageJsonTemplate), { spaces: 2 });
-
-		// Write environment variables
-		await fs.writeFile(path.join(projectPath, ".env.local"), envTemplate);
-
-		// Write MongoDB connection utility
-		await fs.writeFile(path.join(projectPath, "src", "lib", "mongodb.ts"), mongodbTemplate);
-
-		// Write example model
-		await fs.writeFile(path.join(projectPath, "src", "models", "Example.ts"), exampleModelTemplate);
-
-		// Write example API route
-		await fs.writeFile(path.join(projectPath, "src", "app", "api", "examples", "route.ts"), exampleApiTemplate);
-
-		// Write example page
-		await fs.writeFile(path.join(projectPath, "src", "app", "page.tsx"), examplePageTemplate);
-
-		// Write layout file
-		await fs.writeFile(
-			path.join(projectPath, "src", "app", "layout.tsx"),
-			`export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <html lang="en">
-      <body>{children}</body>
-    </html>
-  );
-}`
-		);
-
-		// Write tsconfig.json
-		await fs.writeJson(
-			path.join(projectPath, "tsconfig.json"),
-			{
-				compilerOptions: {
-					target: "es5",
-					lib: ["dom", "dom.iterable", "esnext"],
-					allowJs: true,
-					skipLibCheck: true,
-					strict: true,
-					forceConsistentCasingInFileNames: true,
-					noEmit: true,
-					esModuleInterop: true,
-					module: "esnext",
-					moduleResolution: "node",
-					resolveJsonModule: true,
-					isolatedModules: true,
-					jsx: "preserve",
-					incremental: true,
-					plugins: [
-						{
-							name: "next",
-						},
-					],
-					paths: {
-						"@/*": ["./src/*"],
-					},
-				},
-				include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-				exclude: ["node_modules"],
-			},
-			{ spaces: 2 }
-		);
-
-		spinner.succeed("Next.js project setup completed");
-	} catch (err) {
-		spinner.fail("Failed to set up Next.js project");
-		throw err;
-	}
+function logError(message: string, error?: unknown) {
+  console.error(pc.red(`\nError: ${message}`));
+  if (error instanceof Error) {
+    console.error(pc.gray(error.message));
+  }
 }
+
+// --- File System Utilities (using Bun's fast APIs) ---
+
+async function pathExists(filePath: string): Promise<boolean> {
+  return await Bun.file(filePath).exists();
+}
+
+async function ensureDir(dirPath: string): Promise<void> {
+  // Using Node's fs/promises is fine here. It's reliable and cross-platform.
+  await mkdir(dirPath, { recursive: true });
+}
+
+async function emptyDir(dirPath: string): Promise<void> {
+  await rm(dirPath, { recursive: true, force: true });
+  await ensureDir(dirPath);
+}
+
+// --- Core Scaffolding Logic ---
+
+async function copyTemplate(
+  templatePath: string,
+  projectPath: string,
+  projectName: string,
+): Promise<void> {
+  const spinner = ora("Setting up project files...").start();
+
+  try {
+    const templateFiles = await Array.fromAsync(
+      new Bun.Glob("**/*").scan({ cwd: templatePath, dot: true }),
+    );
+
+    for (const file of templateFiles) {
+      const sourcePath = path.join(templatePath, file);
+      const destPath = path.join(projectPath, file);
+
+      // Ensure parent directory exists before writing file
+      await ensureDir(path.dirname(destPath));
+
+      const sourceFile = Bun.file(sourcePath);
+
+      // More robust: handle package.json as an object, not a string
+      if (file === "package.json") {
+        const pkgContent = await sourceFile.json();
+        pkgContent.name = projectName;
+        await Bun.write(destPath, JSON.stringify(pkgContent, null, 2));
+      } else {
+        // Bun.write can take a BunFile directly for ultra-fast copying
+        await Bun.write(destPath, sourceFile);
+      }
+    }
+
+    spinner.succeed("Project files set up successfully.");
+  } catch (err) {
+    spinner.fail("Failed to copy template files.");
+    throw err; // Propagate error to be caught by the main handler
+  }
+}
+
+async function initializeGit(projectPath: string): Promise<boolean> {
+  const spinner = ora("Initializing git repository...").start();
+  try {
+    await execa("git", ["init"], { cwd: projectPath });
+    spinner.succeed("Git repository initialized.");
+    return true;
+  } catch (err) {
+    spinner.fail("Failed to initialize git. Is git installed?");
+    logError("Could not initialize git repository.", err);
+    return false;
+  }
+}
+
+async function installDependencies(projectPath: string): Promise<boolean> {
+  const spinner = ora("Installing dependencies with bun...").start();
+  try {
+    await execa("bun", ["install"], { cwd: projectPath });
+    spinner.succeed("Dependencies installed.");
+    return true;
+  } catch (err) {
+    spinner.fail("Failed to install dependencies.");
+    logError("Dependency installation failed.", err);
+    console.log(pc.yellow("You can try running 'bun install' manually."));
+    return false;
+  }
+}
+
+// --- Main Exported Function ---
 
 export async function createProject(
-	projectDirectory: string,
-	options: ProjectOptions,
+  projectDirectory: string,
+  options: ProjectOptions,
 ): Promise<ProjectResult | null> {
-	let projectName = projectDirectory;
+  let projectName = projectDirectory;
 
-	if (!projectName && !options.yes) {
-		const response = await prompts({
-			type: "text",
-			name: "projectName",
-			message: "What is the name of your project?",
-			initial: "comet-app",
-		});
+  // 1. Determine Project Name
+  if (!projectName) {
+    if (options.yes) {
+      projectName = "comet-app";
+    } else {
+      const response = await prompts({
+        type: "text",
+        name: "value",
+        message: "What is the path to your new project?",
+        initial: "comet-app",
+      });
+      if (!response.value) return null; // User cancelled
+      projectName = response.value;
+    }
+  }
 
-		if (!response.projectName) {
-			console.log(chalk.yellow("Project creation cancelled."));
-			return null;
-		}
+  const projectPath = path.resolve(process.cwd(), projectName);
 
-		projectName = response.projectName;
-	} else if (!projectName) {
-		projectName = "comet-app";
-	}
+  // 2. Check and Prepare Directory
+  if (await pathExists(projectPath)) {
+    const isDirectoryEmpty =
+      (await Array.fromAsync(new Bun.Glob("*").scan(projectPath))).length === 0;
+    if (!isDirectoryEmpty && !options.yes) {
+      const { value: overwrite } = await prompts({
+        type: "confirm",
+        name: "value",
+        message: `Directory "${projectName}" is not empty. Overwrite it?`,
+        initial: false,
+      });
+      if (!overwrite) return null; // User cancelled
+      await emptyDir(projectPath);
+    }
+  }
+  await ensureDir(projectPath);
 
-	let templateChoice = options.template || "default";
+  // 3. Copy Template Files
+  try {
+    // CRITICAL FIX: Use `import.meta.dir` instead of `__dirname`
+    // This assumes your structure is:
+    // - root/
+    //   - src/
+    //     - utils/
+    //       - helpers.ts  <-- import.meta.dir points here
+    //   - templates/
+    //     - default/
+    const templatePath = path.join(
+      import.meta.dir,
+      "utils",
+      "templates",
+      "default",
+    );
+    await copyTemplate(templatePath, projectPath, projectName);
+  } catch (err) {
+    logError("Could not create project from template.", err);
+    return null;
+  }
 
-	if (!options.yes && !options.branch) {
-		const templateChoices = Object.keys(TEMPLATES).map((key) => ({
-			title: `${key} (${TEMPLATES[key]?.description})`,
-			value: key,
-		}));
+  // 4. Initialize Git (if requested)
+  let gitInitialized = false;
+  if (
+    options.yes ||
+    (
+      await prompts({
+        type: "confirm",
+        name: "value",
+        message: "Initialize a git repository?",
+        initial: true,
+      })
+    ).value
+  ) {
+    gitInitialized = await initializeGit(projectPath);
+  }
 
-		const templateResponse = await prompts({
-			type: "select",
-			name: "template",
-			message: "Select a template:",
-			choices: templateChoices,
-			initial: 0,
-		});
+  // 5. Install Dependencies (if requested)
+  let dependenciesInstalled = false;
+  if (
+    options.yes ||
+    (
+      await prompts({
+        type: "confirm",
+        name: "value",
+        message: "Install dependencies?",
+        initial: true,
+      })
+    ).value
+  ) {
+    dependenciesInstalled = await installDependencies(projectPath);
+  }
 
-		if (templateResponse.template === undefined) {
-			console.log(chalk.yellow("Project creation cancelled."));
-			return null;
-		}
-
-		templateChoice = templateResponse.template;
-	}
-
-	const projectPath = path.resolve(process.cwd(), projectName);
-
-	if (fs.existsSync(projectPath)) {
-		const files = fs.readdirSync(projectPath);
-
-		if (files.length > 0 && !options.yes) {
-			const { overwrite } = await prompts({
-				type: "confirm",
-				name: "overwrite",
-				message: `The directory ${projectName} already exists and is not empty. Do you want to overwrite it?`,
-				initial: false,
-			});
-
-			if (!overwrite) {
-				console.log(chalk.yellow("Project creation cancelled."));
-				return null;
-			}
-
-			await fs.emptyDir(projectPath);
-		}
-	}
-
-	fs.ensureDirSync(projectPath);
-
-	try {
-		await setupNextJsProject(projectPath, templateChoice);
-
-		let gitInitialized = false;
-
-		if (!options.yes) {
-			const gitResponse = await prompts({
-				type: "confirm",
-				name: "initGit",
-				message: "Initialize a git repository?",
-				initial: true,
-			});
-
-			if (gitResponse.initGit) {
-				try {
-					const spinner = ora("Initializing git repository...").start();
-					await execa("git", ["init"], { cwd: projectPath });
-					spinner.succeed("Git repository initialized");
-					gitInitialized = true;
-				} catch (err) {
-					console.error(chalk.red("Git error:"), err);
-				}
-			}
-		} else {
-			try {
-				const spinner = ora("Initializing git repository...").start();
-				await execa("git", ["init"], { cwd: projectPath });
-				spinner.succeed("Git repository initialized");
-				gitInitialized = true;
-			} catch (err) {
-				console.error(chalk.red("Git error:"), err);
-			}
-		}
-
-		let dependenciesInstalled = false;
-
-		if (!options.yes) {
-			const depsResponse = await prompts({
-				type: "confirm",
-				name: "installDeps",
-				message: "Install dependencies?",
-				initial: true,
-			});
-
-			if (depsResponse.installDeps) {
-				const spinner = ora("Installing dependencies...").start();
-				try {
-					await execa("bun", ["install"], { cwd: projectPath });
-					spinner.succeed("Dependencies installed");
-					dependenciesInstalled = true;
-				} catch (err) {
-					spinner.fail("Failed to install dependencies");
-					console.log(
-						chalk.yellow(
-							"You can install them manually after navigating to the project directory.",
-						),
-					);
-				}
-			}
-		} else {
-			const spinner = ora("Installing dependencies...").start();
-			try {
-				await execa("bun", ["install"], { cwd: projectPath });
-				spinner.succeed("Dependencies installed");
-				dependenciesInstalled = true;
-			} catch (err) {
-				spinner.fail("Failed to install dependencies");
-				console.log(
-					chalk.yellow(
-						"You can install them manually after navigating to the project directory.",
-					),
-				);
-			}
-		}
-
-		return {
-			projectName,
-			gitInitialized,
-			dependenciesInstalled,
-			template: templateChoice,
-		};
-	} catch (err) {
-		console.error(chalk.red("Error creating project:"), err);
-		throw err;
-	}
+  return {
+    projectName,
+    gitInitialized,
+    dependenciesInstalled,
+    template: "default",
+  };
 }
